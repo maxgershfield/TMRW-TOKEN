@@ -1,0 +1,6 @@
+# Reference images not needed in deployment
+references/
+
+# Backup and test files
+index-original.html
+test-api.html
