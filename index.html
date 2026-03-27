@@ -499,16 +499,7 @@
       .detail { border-left: none; border-top: 1px solid var(--border); max-height: 220px; }
     }
 
-    /* ── Login overlay ───────────────────────────────────────── */
-    #loginOverlay {
-      position: fixed; inset: 0; z-index: 200;
-      background: #010306;
-      background-image:
-        linear-gradient(rgba(0,220,200,0.025) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(0,220,200,0.025) 1px, transparent 1px);
-      background-size: 52px 52px;
-      display: flex; align-items: center; justify-content: center; padding: 20px;
-    }
+    /* ── Auth modal form styles ──────────────────────────────── */
     .login-card {
       width: min(420px, 100%); border: 1px solid rgba(0,220,200,0.22); border-radius: 0;
       background: rgba(3,8,22,0.99);
@@ -601,35 +592,7 @@
 </head>
 <body>
 
-  <!-- Login overlay -->
-  <div id="loginOverlay">
-    <div class="login-card">
-      <div class="login-logo">
-        <div class="hex-icon"></div>
-        <div>
-          <h1 class="syne">TMRW Token Management</h1>
-          <div class="sub">Powered by The OASIS · Web4 Protocol</div>
-        </div>
-      </div>
-      <div class="login-field">
-        <label>API Base URL</label>
-        <input id="loginBase" type="text" value="https://api.oasisweb4.com" />
-      </div>
-      <div class="login-field">
-        <label>Username</label>
-        <input id="loginUser" type="text" placeholder="OASIS_ADMIN" />
-      </div>
-      <div class="login-field">
-        <label>Password</label>
-        <input id="loginPass" type="password" placeholder="••••••••" onkeydown="if(event.key==='Enter')doLogin()" />
-      </div>
-      <div class="login-err" id="loginErr"></div>
-      <button class="login-btn" id="loginBtn" onclick="doLogin()">Sign In →</button>
-      <div class="login-note">TMRW Digital · The OASIS · ECS API<br>api.oasisweb4.com</div>
-    </div>
-  </div>
-
-  <div class="page" style="display:none" id="mainApp">
+  <div class="page" id="mainApp">
 
     <!-- Top bar -->
     <header class="top">
@@ -642,7 +605,13 @@
       </div>
       <div class="top-right">
         <span class="mono" style="font-size:0.58rem;color:var(--muted)" id="lastUpdated"></span>
-        <div id="authChip" style="display:flex;align-items:center;gap:6px;padding:3px 10px;border:1px solid var(--border);font-family:'IBM Plex Mono',monospace;font-size:0.55rem;color:var(--muted);letter-spacing:0.06em">
+        <!-- Guest state: shown when not authenticated -->
+        <div id="authBtns" style="display:flex;align-items:center;gap:6px">
+          <button class="btn" style="font-size:0.56rem;padding:4px 10px" onclick="openModal('signIn')">Sign In</button>
+          <button class="btn btn-primary" style="font-size:0.56rem;padding:4px 10px" onclick="openModal('register')">Create Account</button>
+        </div>
+        <!-- Authenticated state: shown when signed in -->
+        <div id="authChip" style="display:none;align-items:center;gap:6px;padding:3px 10px;border:1px solid var(--border);font-family:'IBM Plex Mono',monospace;font-size:0.55rem;color:var(--muted);letter-spacing:0.06em">
           <span style="width:5px;height:5px;border-radius:50%;background:var(--accent);box-shadow:0 0 5px rgba(0,220,200,0.7);flex-shrink:0"></span>
           <span id="authUser">—</span>
           <span style="color:rgba(255,255,255,0.15)">|</span>
@@ -1193,9 +1162,9 @@
       if (JWT) headers["Authorization"] = `Bearer ${JWT}`;
       try {
         const res = await fetch(BASE_URL + path, { ...opts, headers });
-        // Session expired — clear auth and show login
+        // Session expired — clear auth state without blocking the UI
         if (res.status === 401 || res.status === 403) {
-          signOut("Session expired — please sign in again.");
+          if (JWT) { JWT = ""; AVATAR_ID = ""; AVATAR_NAME = ""; localStorage.removeItem("oasis_jwt"); localStorage.removeItem("oasis_avid"); localStorage.removeItem("oasis_name"); renderAuthState(); showToast("Session expired — sign in again."); }
           return { ok: false, status: res.status, result: null, message: "Session expired", isError: true, raw: null };
         }
         const data = await res.json();
@@ -1215,14 +1184,8 @@
       localStorage.removeItem("oasis_jwt");
       localStorage.removeItem("oasis_avid");
       localStorage.removeItem("oasis_name");
-      const overlay = document.getElementById("loginOverlay");
-      const app     = document.getElementById("mainApp");
-      if (overlay) overlay.style.display = "";
-      if (app)     app.style.display     = "none";
-      const err = document.getElementById("loginErr");
-      if (err && message) { err.style.color = "var(--accent)"; err.textContent = message; }
-      document.getElementById("loginUser").value = "";
-      document.getElementById("loginPass").value = "";
+      renderAuthState();
+      showToast(message || "Signed out.");
     }
 
     // ── Login ──────────────────────────────────────────────────────────────────
@@ -1253,12 +1216,56 @@
         localStorage.setItem("oasis_jwt",  JWT);
         localStorage.setItem("oasis_avid", AVATAR_ID);
         localStorage.setItem("oasis_name", AVATAR_NAME);
-        document.getElementById("loginOverlay").style.display = "none";
-        document.getElementById("mainApp").style.display = "";
+        closeModal();
         renderAuthState();
         await loadDashboard(r.result);
       } else {
         err.textContent = r.message || `Auth failed (HTTP ${r.status})`;
+      }
+    }
+
+    // ── Register ───────────────────────────────────────────────────────────────
+    async function submitRegister() {
+      const first = (document.getElementById("m-reg-first")?.value || "").trim();
+      const last  = (document.getElementById("m-reg-last")?.value  || "").trim();
+      const user  = (document.getElementById("m-reg-user")?.value  || "").trim();
+      const email = (document.getElementById("m-reg-email")?.value || "").trim();
+      const pass  = (document.getElementById("m-reg-pass")?.value  || "");
+      const pass2 = (document.getElementById("m-reg-pass2")?.value || "");
+      const err   = document.getElementById("m-reg-err");
+      const btn   = document.getElementById("m-reg-btn");
+      const regBase = (document.getElementById("m-reg-base")?.value || "https://api.oasisweb4.com").trim().replace(/\/$/, "");
+      if (!user || !email || !pass) { if (err) err.textContent = "Username, email and password are required."; return; }
+      if (pass !== pass2) { if (err) err.textContent = "Passwords do not match."; return; }
+      if (err) err.textContent = "";
+      if (btn) { btn.textContent = "Creating…"; btn.disabled = true; }
+      BASE_URL = regBase;
+      const r = await api("/api/avatar/register", {
+        method: "POST",
+        body: JSON.stringify({ FirstName: first, LastName: last, Username: user, Email: email, Password: pass }),
+      });
+      if (btn) { btn.textContent = "Create Account →"; btn.disabled = false; }
+      if (r.ok && !r.isError) {
+        closeModal();
+        showToast("Account created — signing you in…");
+        // Auto sign-in after registration
+        const lr = await api("/api/avatar/authenticate", { method: "POST", body: JSON.stringify({ Username: user, Password: pass }) });
+        if (lr.ok && lr.result?.jwtToken) {
+          JWT = lr.result.jwtToken;
+          AVATAR_ID = lr.result.id || lr.result.avatarId || "";
+          AVATAR_NAME = lr.result.username || lr.result.firstName || user;
+          localStorage.setItem("oasis_base", BASE_URL);
+          localStorage.setItem("oasis_jwt",  JWT);
+          localStorage.setItem("oasis_avid", AVATAR_ID);
+          localStorage.setItem("oasis_name", AVATAR_NAME);
+          renderAuthState();
+          await loadDashboard(lr.result);
+        } else {
+          showToast("Account created. Please sign in.");
+          openModal("signIn");
+        }
+      } else {
+        if (err) err.textContent = r.message || "Registration failed. Please try again.";
       }
     }
 
@@ -1546,6 +1553,80 @@
 
     // ── Modal content ─────────────────────────────────────────────────────────
     const MODALS = {
+      get signIn() { const _base = localStorage.getItem("oasis_base") || "https://api.oasisweb4.com"; return {
+        title: "Sign In",
+        sub: "POST /api/avatar/authenticate  ✓ LIVE",
+        body: `
+          <div style="display:flex;flex-direction:column;gap:10px">
+            <label style="font-size:0.7rem;color:var(--muted)">Username
+              <input id="loginUser" type="text" placeholder="your_username" autocomplete="username"
+                style="display:block;width:100%;margin-top:4px;background:rgba(0,0,0,0.6);border:1px solid var(--border);color:var(--text);padding:7px 10px;font-family:'IBM Plex Mono',monospace;font-size:0.72rem;border-radius:4px"/>
+            </label>
+            <label style="font-size:0.7rem;color:var(--muted)">Password
+              <input id="loginPass" type="password" placeholder="••••••••" autocomplete="current-password"
+                onkeydown="if(event.key==='Enter')doLogin()"
+                style="display:block;width:100%;margin-top:4px;background:rgba(0,0,0,0.6);border:1px solid var(--border);color:var(--text);padding:7px 10px;font-family:'IBM Plex Mono',monospace;font-size:0.72rem;border-radius:4px"/>
+            </label>
+            <details style="margin-top:4px">
+              <summary style="font-size:0.62rem;color:var(--muted);cursor:pointer;letter-spacing:0.06em">Advanced</summary>
+              <label style="font-size:0.7rem;color:var(--muted);display:block;margin-top:8px">API Base URL
+                <input id="loginBase" type="text" value="${_base}"
+                  style="display:block;width:100%;margin-top:4px;background:rgba(0,0,0,0.6);border:1px solid var(--border);color:var(--text);padding:7px 10px;font-family:'IBM Plex Mono',monospace;font-size:0.72rem;border-radius:4px"/>
+              </label>
+            </details>
+          </div>
+          <div id="loginErr" style="font-family:'IBM Plex Mono',monospace;font-size:0.6rem;color:var(--red);min-height:18px;margin-top:8px"></div>
+          <button id="loginBtn" class="btn btn-primary" style="width:100%;margin-top:10px" onclick="doLogin()">Sign In →</button>
+          <div style="text-align:center;margin-top:12px;font-family:'IBM Plex Mono',monospace;font-size:0.58rem;color:var(--muted)">
+            No account? <span onclick="openModal('register')" style="color:var(--accent);cursor:pointer;text-decoration:underline">Create one</span>
+          </div>`
+      }},
+      get register() { const _base = localStorage.getItem("oasis_base") || "https://api.oasisweb4.com"; return {
+        title: "Create Account",
+        sub: "POST /api/avatar/register  ✓ LIVE",
+        body: `
+          <div style="display:flex;flex-direction:column;gap:10px">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+              <label style="font-size:0.7rem;color:var(--muted)">First Name
+                <input id="m-reg-first" type="text" placeholder="First"
+                  style="display:block;width:100%;margin-top:4px;background:rgba(0,0,0,0.6);border:1px solid var(--border);color:var(--text);padding:7px 10px;font-family:'IBM Plex Mono',monospace;font-size:0.72rem;border-radius:4px"/>
+              </label>
+              <label style="font-size:0.7rem;color:var(--muted)">Last Name
+                <input id="m-reg-last" type="text" placeholder="Last"
+                  style="display:block;width:100%;margin-top:4px;background:rgba(0,0,0,0.6);border:1px solid var(--border);color:var(--text);padding:7px 10px;font-family:'IBM Plex Mono',monospace;font-size:0.72rem;border-radius:4px"/>
+              </label>
+            </div>
+            <label style="font-size:0.7rem;color:var(--muted)">Username
+              <input id="m-reg-user" type="text" placeholder="choose_a_username" autocomplete="username"
+                style="display:block;width:100%;margin-top:4px;background:rgba(0,0,0,0.6);border:1px solid var(--border);color:var(--text);padding:7px 10px;font-family:'IBM Plex Mono',monospace;font-size:0.72rem;border-radius:4px"/>
+            </label>
+            <label style="font-size:0.7rem;color:var(--muted)">Email
+              <input id="m-reg-email" type="email" placeholder="you@example.com"
+                style="display:block;width:100%;margin-top:4px;background:rgba(0,0,0,0.6);border:1px solid var(--border);color:var(--text);padding:7px 10px;font-family:'IBM Plex Mono',monospace;font-size:0.72rem;border-radius:4px"/>
+            </label>
+            <label style="font-size:0.7rem;color:var(--muted)">Password
+              <input id="m-reg-pass" type="password" placeholder="••••••••" autocomplete="new-password"
+                style="display:block;width:100%;margin-top:4px;background:rgba(0,0,0,0.6);border:1px solid var(--border);color:var(--text);padding:7px 10px;font-family:'IBM Plex Mono',monospace;font-size:0.72rem;border-radius:4px"/>
+            </label>
+            <label style="font-size:0.7rem;color:var(--muted)">Confirm Password
+              <input id="m-reg-pass2" type="password" placeholder="••••••••" autocomplete="new-password"
+                onkeydown="if(event.key==='Enter')submitRegister()"
+                style="display:block;width:100%;margin-top:4px;background:rgba(0,0,0,0.6);border:1px solid var(--border);color:var(--text);padding:7px 10px;font-family:'IBM Plex Mono',monospace;font-size:0.72rem;border-radius:4px"/>
+            </label>
+            <details style="margin-top:4px">
+              <summary style="font-size:0.62rem;color:var(--muted);cursor:pointer;letter-spacing:0.06em">Advanced</summary>
+              <label style="font-size:0.7rem;color:var(--muted);display:block;margin-top:8px">API Base URL
+                <input id="m-reg-base" type="text" value="${_base}"
+                  style="display:block;width:100%;margin-top:4px;background:rgba(0,0,0,0.6);border:1px solid var(--border);color:var(--text);padding:7px 10px;font-family:'IBM Plex Mono',monospace;font-size:0.72rem;border-radius:4px"/>
+              </label>
+            </details>
+          </div>
+          <div id="m-reg-err" style="font-family:'IBM Plex Mono',monospace;font-size:0.6rem;color:var(--red);min-height:18px;margin-top:8px"></div>
+          <button id="m-reg-btn" class="btn btn-primary" style="width:100%;margin-top:10px" onclick="submitRegister()">Create Account →</button>
+          <div style="text-align:center;margin-top:12px;font-family:'IBM Plex Mono',monospace;font-size:0.58rem;color:var(--muted)">
+            Already have an account? <span onclick="openModal('signIn')" style="color:var(--accent);cursor:pointer;text-decoration:underline">Sign in</span>
+          </div>`
+      }},
       newToken: {
         title: "Add Web4 Token",
         sub: "POST /api/token/create-web4-token  ✓ LIVE",
@@ -2711,31 +2792,21 @@
     // ── Auth state display ─────────────────────────────────────────────────────
     function renderAuthState() {
       const chip = document.getElementById("authChip");
+      const btns = document.getElementById("authBtns");
       const user = document.getElementById("authUser");
-      if (!chip || !user) return;
-      if (JWT && AVATAR_ID) {
-        user.textContent = AVATAR_NAME || AVATAR_ID.slice(0, 8) + "…";
-        chip.style.display = "flex";
-      } else {
-        chip.style.display = "none";
-      }
+      const loggedIn = !!(JWT && AVATAR_ID);
+      if (chip) chip.style.display = loggedIn ? "flex" : "none";
+      if (btns) btns.style.display = loggedIn ? "none" : "flex";
+      if (user && loggedIn) user.textContent = AVATAR_NAME || AVATAR_ID.slice(0, 8) + "…";
     }
 
     // ── Init ──────────────────────────────────────────────────────────────────
-    // Pre-fill saved API URL on login screen
-    const savedBase = localStorage.getItem("oasis_base");
-    if (savedBase) document.getElementById("loginBase").value = savedBase;
-
-    // If already authenticated (localStorage has JWT), skip login
+    renderEndpoints();
+    renderAuthState();
     if (JWT && AVATAR_ID) {
-      document.getElementById("loginOverlay").style.display = "none";
-      document.getElementById("mainApp").style.display = "";
-      renderEndpoints();
-      renderAuthState();
       document.getElementById("lastUpdated").textContent = `${liveCt} live · ${buildCt} to build · Loading…`;
       loadDashboard(null);
     } else {
-      renderEndpoints();
       document.getElementById("lastUpdated").textContent = `${liveCt} live · ${buildCt} to build`;
     }
 
@@ -2748,7 +2819,7 @@
       const bodyEl  = document.querySelector('.body');
       const railEl  = bodyEl && bodyEl.querySelector('.rail');
       const contEl  = bodyEl && bodyEl.querySelector('.content');
-      const detailEl= bodyEl && bodyEl.querySelector('.detail');
+      const detailEl= bodyEl && (bodyEl.querySelector('.agent-panel') || bodyEl.querySelector('.detail'));
       if (!railEl || !contEl || !detailEl) return;
 
       // Insert two 4px handle columns into the grid
